@@ -22,7 +22,7 @@ import pprint
 #     uniprot = tuple([i.strip() for i in f])
 
 the_threshold = 0.12
-score_threshold = 0.9
+score_threshold = 0.88
 tolerance = 1000
 thr = 0.05
 
@@ -32,20 +32,20 @@ class BacteriaSpectra:
         if type(spectra_id) == str:
             self.pattern = spectra_id
         else:
-            self.pattern = 'spectra/'+ms_spectra[spectra_id]
+            self.pattern = 'spectra/'+ ms_spectra[spectra_id]
             self.taxonomy = self.pattern.split('.')[0]
             self.genus = self.pattern.split()[0].lower()
             self.species = self.pattern.split()[1].lower()
 
     def plot(self):
-        pattern_file = self.get_filterd_pattern(0)
+        pattern_file = self.get_filtered_pattern(0)
         fig, ax = plt.subplots()
         if type(self.id) != str:
             
             pat_matched_file = self.get_matched_peak(0.05).groupby('mw_raw').min()
             pat_matched_file = pat_matched_file[pat_matched_file.mw < 500]
             pat_index = pat_matched_file.index
-            pattern_file['color'] = pattern_file['mz'].apply(\
+            pattern_file['color'] = pattern_file['mz'].apply(
                 lambda x:[0.6, 0.6, 0.6, 1] if x in pat_index else [0, 0, 0, 1])
 
             bars = ax.bar(pattern_file['mz'], pattern_file['int'], width=14, facecolor='k')
@@ -76,7 +76,8 @@ class BacteriaSpectra:
             ax.set_title(self.genus.capitalize() +' ' + self.species)
         return ax
 
-    def get_filterd_pattern(self, int_threshold=the_threshold):
+    def get_filtered_pattern(self, int_threshold=the_threshold):
+        # loading .csv file containing MS data (intensity to molecular weight) into a pd data frame
         peaks = open(self.pattern, "r")
         standard_mass, standard_int = ([], [])
         for peak in peaks:
@@ -84,10 +85,14 @@ class BacteriaSpectra:
             standard_int.append(float(peak.split()[1]))
         peaks.close()
         pattern = pd.DataFrame({'mz': standard_mass, 'int': standard_int})
+
+        # Performing normalisation to fit intensities to range from 0 to 1
         if pattern.int.max() > 100:
             pattern['int'] = pattern.int / pattern.int.max()
         elif pattern.int.max() > 1:
             pattern['int'] = pattern.int / 100
+
+        # Returning only entries where normalised intensity is above specified threshold
         return pattern[pattern.int > int_threshold]
 
     def get_uniprot_table(self):
@@ -97,7 +102,7 @@ class BacteriaSpectra:
 
     def get_matched_peak(self,int_threshold):
         def match_milk_peak(x):
-            raw = self.get_filterd_pattern(int_threshold)
+            raw = self.get_filtered_pattern(int_threshold)
             y = abs(raw['mz'] - x)
             y_delta = y[y < x * tolerance * 1e-6]
             if len(y_delta) == 0:
@@ -114,68 +119,75 @@ class BacteriaSpectra:
         my_table_matched.to_csv('matched_result/'+str(self.id)+'.csv')
         return my_table_matched
 
+
 class IdentifySpectra(BacteriaSpectra):
-
-
-    def answer(self,model_data,threshold=the_threshold):
+    def answer(self, model_data, threshold=the_threshold):
         t1 = time.time()
-        threshold=the_threshold
-        com_table,answer_table,gn_set,gn_value = model_data 
-        pattern = self.get_filterd_pattern(threshold)
-        
+        threshold = the_threshold
+        com_table, answer_table, gn_set, gn_value = model_data
+        pattern = self.get_filtered_pattern(threshold)
+
         def match_soy_peak(x):
+            """
+            Attempts to identify presence of gene from MS data.
+            :param x: input gene weight
+            :return: (float) measure of "closeness" to theoretical weight (???)
+            """
             y = abs(pattern['mz'] - x)
             y = y[y < x * tolerance * 1e-6]
             if len(y) == 0:
                 return 0.0
+
             return round(np.exp(-y.iloc[0]*1e3/x), 2)
-        
-        def making_faster(my_table,my_gene_set):
+
+
+        def making_faster(my_table, my_gene_set):
+            """
+
+            :param my_table: matrix of 10 genes and respective weights for each (genus, species) pair
+            :param my_gene_set: list of 10 most informative genes
+            :return: List of unique gene weights for all (genus, species, gene) triplets
+            """
             my_table = my_table.fillna(0)
-            b=set({})
+            b = set({})
             for i in my_gene_set:
-                b = b|set(my_table[i].unique())
+                b = b | set(my_table[i].unique())  # union of set
             return list(b)
 
-        b = making_faster(com_table,gn_set)
-        c = [match_soy_peak(x) for x in b]
-        my_mw_dict = dict(zip(b,c))
-        table = com_table.applymap(lambda x:my_mw_dict[x])
-        #table.to_csv('a_table.csv')
-        #return (table.dot(gn_value))
+        b = making_faster(com_table, gn_set)   # a list of unique gene weights, apparently (???)
 
-        id_value = (table.dot(gn_value)).sort_values()
-        #id_value.to_csv('a_can.csv')
-        id_panel = id_value[-4:]
-        score_mode =id_panel.mode()
+        c = [match_soy_peak(x) for x in b]
+
+        my_mw_dict = dict(zip(b, c))
+
+        table = com_table.applymap(lambda x: my_mw_dict[x])
+
+        id_value = (table.dot(gn_value)).sort_values()  # list of "similarity" measure to gene index
+        id_panel = id_value[-4:]  # getting the last 4 (genes with highest similarity measures)
+
+        score_mode = id_panel.mode()
         if not score_mode.empty :
             score = score_mode.iloc[-1]
         else:
             score = id_panel.max()
+
         if score < score_threshold:
             return 'none'
-        #return id_value
-        #if score == 0:
-        #   return ()
-        answer_dict={}
+
         candidates = id_panel[id_panel == score].index[0]
         species_index = id_panel[id_panel == score].index
         species_candidates = tuple(answer_table.iloc[species_index]['species'])
         answer_candidate = answer_table.iloc[candidates]['genus']
+        print("answer candidate:", answer_candidate)
         t2 = time.time()
-        answer_dict = {'score': score, 'time': round(t2-t1, 2),\
-        "genera": answer_candidate, "species" : species_candidates,\
-        "path": self.pattern}
-        pprint.pprint(answer_dict)
-        return answer_dict['genera']
-        #candidate = list(set([answer_table.iloc[c]['genus'] for c in candidates]))
-        #candidate.sort()        
-        #if len(candidate) == 0:
-        #    return ''
-        #return candidate[0]
 
-        #the_answer['score'] = id_value
-        #return the_answer.sort_values('score',ascending=False)[:5]
+        answer_dict = {'score': score, 'time': round(t2-t1, 2),
+                       "genera": answer_candidate, "species" : species_candidates,
+                       "path": self.pattern}
+
+        pprint.pprint(answer_dict)
+        print(answer_dict)
+        return answer_dict['genera']
 
 
 '''
@@ -269,3 +281,4 @@ def try_num(x):
         return 0
 gm['num'] = gm['org'].map( try_num )
 '''
+

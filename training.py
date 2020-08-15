@@ -9,6 +9,9 @@ from scipy.stats import mode
 import matplotlib.pyplot as plt
 from adjustText import adjust_text
 
+from identification import BacteriaSpectra, IdentifySpectra
+
+
 def training_gene_names(sample, threshold):
     matched_table = pd.concat([BacteriaSpectra(sample_id).get_matched_peak(threshold) for sample_id in sample],ignore_index=True)
     pre_gn_table = dict(zip(list(set(matched_table.gn)),[0]*len(set(matched_table.gn))))
@@ -25,25 +28,52 @@ def genetic_algorithms(each_group, gene_int):
 
 
 def training_comparison_table(gene_value_table):
-    gn_set = list(gene_value_table.index)
+    '''
+
+    :param gene_value_table: 10 most informative genes mapped to mean gene weights
+    :return: pd dataframes of modal gene weights of 10 most informative genes sorted by unique (genus, species) pairs
+    '''
+    gn_set = list(gene_value_table.index)  # List of gene names
+
     def is_gn_set(x):
         if x in gn_set:
             return x
         return None
+
     def if_mode(x):
-        return round(min(mode(x).mode),1)
+        return round(min(mode(x).mode), 1)
+
+    #  Processing uniprot table to leave in only entries with the 10 genes we're concerned with
     uniprot_table = pd.read_csv('uniprot_table.csv', index_col = 0)
     uniprot_table['gn'] = uniprot_table['gn'].map(is_gn_set)
     uniprot_table = uniprot_table.dropna()
-    table_iterator =  uniprot_table.groupby(['genus','species'])
+
+    table_iterator = uniprot_table.groupby(['genus','species'])
+
+    # def each():
+    #     for i in table_iterator:
+    #         gene_table = dict(zip(['genus', 'species'], i[0]))
+    #
+    #         for gn_iterator in i[1].groupby('gn'):
+    #             gene_table[gn_iterator[0]] = if_mode(gn_iterator[1]['mw'])
+    #             print(gn_iterator, gene_table[gn_iterator[0]])
+    #         yield pd.DataFrame(gene_table, index=[0])
+
+    # print(each().__next__())
+    # print(each().__next__())
+    # print(each().__next__())
+
+
     def each_gn(iterator):
-        gene_table = dict(zip(['genus','species'],iterator[0]))
+        gene_table = dict(zip(['genus','species'], iterator[0]))
         for gn_iterator in iterator[1].groupby('gn'):
             gene_table[gn_iterator[0]] = if_mode(gn_iterator[1]['mw'])
-        return pd.DataFrame(gene_table,index=[0])
-    comparison_table = pd.concat([each_gn(i) for i in table_iterator],ignore_index=True).round(0)
+        return pd.DataFrame(gene_table, index=[0])
 
-    return comparison_table.round(0)
+    comparison_table = pd.concat([each_gn(i) for i in table_iterator], ignore_index=True, sort=True).round(0)
+    # pd.set_option('display.max_columns', None)
+    # print(comparison_table.head(10))
+    return comparison_table
 
 def get_accuracy(validation):
     the_accuracy = 0
@@ -60,6 +90,7 @@ def gn_training(my_sample,threshold):
     my_comparison = training_comparison_table(my_gene)
     my_gene_set = list(my_gene.index)
     my_table = my_comparison[my_gene_set].fillna(0.0)
+
     #my_comparison.to_csv('a_com.csv')
     my_answer_table = my_comparison[['genus','species']]
 
@@ -101,14 +132,23 @@ def int_training(my_sample, my_test, threshold = 0.04):
 
     return model_para,model_record
 
+
 def gene_to_model(my_gene):
-    my_gene = my_gene[:10]
+    '''
+        :param my_gene: pd of 10 most information gene mapped to mean weight
+        :return: (1) my_table: matrix of 10 genes and respective weights for each (genus, species) pair
+                 (2) my_answer_table: corresponding matrix of (genus, species)
+                 (3) my_gene_set: list of 10 informative genes
+                 (4) my_gene: input to the function LOL
+    '''
+    my_gene = my_gene[:10]  # Getting 10 most insightful genes only
     my_comparison = training_comparison_table(my_gene)
     my_gene_set = list(my_gene.index)
+
     my_table = my_comparison[my_gene_set].fillna(0.0)
-    my_answer_table = my_comparison[['genus','species']]
-    model_data = (my_table,my_answer_table,my_gene_set,my_gene)
-    return  model_data
+    my_answer_table = my_comparison[['genus', 'species']]
+    model_data = (my_table, my_answer_table, my_gene_set, my_gene)
+    return model_data
 
 def fold_10(lists):
     train = set(lists)
